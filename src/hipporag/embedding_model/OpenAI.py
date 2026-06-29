@@ -7,6 +7,8 @@ from tqdm import tqdm
 from transformers import AutoModel
 from openai import OpenAI
 from openai import AzureOpenAI
+from openai import APIError, RateLimitError
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from ..utils.config_utils import BaseConfig
 from ..utils.logging_utils import get_logger
@@ -73,7 +75,17 @@ class OpenAIEmbeddingModel(BaseEmbeddingModel):
     def encode(self, texts: List[str]):
         texts = [t.replace("\n", " ") for t in texts]
         texts = [t if t != '' else ' ' for t in texts]
-        response = self.client.embeddings.create(input=texts, model=self.embedding_model_name)
+
+        @retry(
+            retry=retry_if_exception_type((RateLimitError, APIError)),
+            wait=wait_exponential(multiplier=1, min=1, max=60),
+            stop=stop_after_attempt(8),
+            reraise=True,
+        )
+        def _create():
+            return self.client.embeddings.create(input=texts, model=self.embedding_model_name)
+
+        response = _create()
         results = np.array([v.embedding for v in response.data])
 
         return results
